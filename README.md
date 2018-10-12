@@ -7,7 +7,7 @@ The model includes [offline signature](https://github.com/drunken005/ethereum-of
 
 ```bash
     npm start
-    or
+       or
     node index.js
 ```
 
