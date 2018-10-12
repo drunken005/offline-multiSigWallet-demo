@@ -1,0 +1,31 @@
+{
+  "name": "offline-multisigwallet-demo",
+  "version": "1.0.0",
+  "description": "Ethereum offline multi sign wallet",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drunken005/offline-multiSigWallet-demo.git"
+  },
+  "keywords": [
+    "Ethereum",
+    "MultiSigWallet"
+  ],
+  "author": "drunken",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/drunken005/offline-multiSigWallet-demo/issues"
+  },
+  "homepage": "https://github.com/drunken005/offline-multiSigWallet-demo#readme",
+  "dependencies": {
+    "bignumber.js": "git+https://github.com/frozeman/bignumber.js-nolookahead.git",
+    "ethereum-offline-sign": "^1.0.1",
+    "multi-wallet-sig": "^1.0.2",
+    "solc": "^0.4.25",
+    "web3": "^0.20.1"
+  }
+}
