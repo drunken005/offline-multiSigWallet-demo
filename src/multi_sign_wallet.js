@@ -2,6 +2,7 @@ const EtherSigner = require('ethereum-offline-sign');
 const multiWalletSig = require('multi-wallet-sig');
 const BigNumber = require('bignumber.js');
 
+const ERC20Interface = require('../contracts/ERC20Interface.sol.js');
 const config = require('./config');
 const compile = require('./compile_eth_contract');
 const web3Connection = require('./web3_connection');
@@ -16,9 +17,9 @@ function printLogBasic(log) {
 
 class MultiSignWallet {
     constructor() {
-        this.web3 = web3Connection(config.ethPoint);
-        this.eth = this.web3.eth;
-        this.multiSignWallet = null;
+        let web3 = web3Connection(config.ethPoint);
+        this.web3 = web3;
+        this.eth = web3.eth;
     }
 
     txFinalConfirm(web3, txHash, numBlocksToWait = 1) {
@@ -64,8 +65,14 @@ class MultiSignWallet {
         });
     }
 
-    async getBalance(web3, address) {
-        let balance = await web3.eth.getBalance(address);
+    async getBalance(web3, address, tokenAddress) {
+        let balance;
+        if (tokenAddress) {
+            let tokenContract = web3.eth.contract(ERC20Interface.abi);
+            balance = tokenContract.at(tokenAddress).balanceOf(address);
+        } else {
+            balance = await web3.eth.getBalance(address);
+        }
         return parseInt(balance);
     }
 
@@ -75,101 +82,136 @@ class MultiSignWallet {
     }
 
     /**
-     * Deploy multi sign wallet contract
-     * @param privateKey Contract creator private key
-     * @param owners ETH address that requires signature verification to execute the contract
-     * @param threshold Number of required sign confirmations.
+     * Deploy contract to Ether chain
+     * @param name Contract name
+     * @param contract Compiled contract abi and bytecode
+     * @param params Contract constructor params type of array
      * @returns {Promise<*>}
      */
-    async createMultiSigWallet(privateKey, multiContract, owners, threshold) {
+    async deployContract(name, contract, params = []) {
         let web3 = this.web3;
-        printLog('Deploy multiSignWallet contract');
+        printLog(`Deploy ${name} contract`);
         //Get current gas price
         let gasPrice = web3.eth.gasPrice;
 
         //offline sign contract deploy data
-        let etherSigner = new EtherSigner(null, privateKey, gasPrice, config.gasLimit);
+        let etherSigner = new EtherSigner(null, config.senderPrivateKey, gasPrice, config.gasLimit);
         let creator = etherSigner.getAddress();
-        printLogBasic(`MultiSigWallet creator: ${creator}`);
-        const multi = web3.eth.contract(multiContract.abi);
-        let params = [
-            owners,
-            threshold,
-            {
-                data: multiContract.bytecode,
-                gas: config.gasLimit,
-                from: creator
-            }
-        ];
-        let deployContractTx = etherSigner.deployContractSign(multi, params, web3.eth.getTransactionCount(creator));
-        // printLogBasic('Deploy contract sign result: ');
-        // console.log(deployContractTx);
+        printLogBasic(`${name} contract creator: ${creator}`);
+        const dpContract = web3.eth.contract(contract.abi);
+
+        printLogBasic('Deploy ' + name + ' contract  params:');
+        console.log('    ', params);
+
+        params.push({data: contract.bytecode, gas: config.gasLimit, from: creator});
+
+        let deployContractTx = etherSigner.deployContractSign(dpContract, params, web3.eth.getTransactionCount(creator));
 
         //send raw transaction
-        printLogBasic('Send deploy multiSigWallet contract  transaction.');
+        printLogBasic('Send deploy ' + name + ' contract  transaction.');
         let depHash = web3.eth.sendRawTransaction(deployContractTx);
-        printLogBasic('Deploy multiSigWallet contract transaction hash: ' + depHash);
+        printLogBasic('Deploy ' + name + ' contract transaction hash: ' + depHash);
         printLogBasic('wait deploy .............');
 
         //Waiting for block confirmation
         let confirmTx = await this.txReceiptConfirm(web3, depHash);
-        printLogBasic('MultiSigWallet deployed at : ' + confirmTx.contractAddress);
-        printLog('Deploy multiSignWallet contract success.\n');
-        this.multiSignWallet = multi.at(confirmTx.contractAddress);
-        return this.multiSignWallet.address;
+        printLogBasic(name + ' deployed at : 【' + confirmTx.contractAddress + '】');
+        printLog('Deploy ' + name + ' contract success.\n');
+        return confirmTx.contractAddress;
     }
 
 
-    async run() {
+    async sendToken(destination, amount) {
+        let {eth, web3, getBalance, txFinalConfirm} = this;
+        printLog('Send Erc20 Token ' + amount + ' [INS] to [' + destination + '].');
+        let gasPrice = web3.eth.gasPrice;
+        let contractAddress = config.erc20Token;
+        let tokenContract = web3.eth.contract(ERC20Interface.abi);
+        let etherSigner = new EtherSigner(tokenContract.at(contractAddress), config.senderPrivateKey, gasPrice, config.gasLimit);
+        let signer = etherSigner.getAddress();
+        let nonce = eth.getTransactionCount(signer);
+        let params = [destination, etherSigner.toWei(amount), {from: signer}];
+        let signedTx = etherSigner.contractTransferSign('transfer', params, contractAddress, nonce, 0);
 
-        // let multiSignWalletContract = this.compileContract();
-        let multiSignWalletContract = require('../contracts/multiSigWallet.sol.js');
+        let hash = eth.sendRawTransaction(signedTx);
+        printLogBasic('Send Erc20 Token ' + amount + ' [INS] to [' + destination + '] raw transaction hash : ' + hash);
 
-        await this.createMultiSigWallet(config.senderPrivateKey, multiSignWalletContract, config.owners, config.threshold);
+        let confirmTx = await txFinalConfirm(web3, hash, 3);
+        printLogBasic('Send Erc20 Token ' + amount + ' [INS] to [' + destination + '] transaction confirm : ' + confirmTx.hash);
 
+        //Get 'destination' balance
+        let multiBalance = await getBalance(web3, destination, contractAddress);
+        printLogBasic('[' + destination + '] Erc20 Token [INS] balance: ' + multiBalance);
+        printLog('Send  Erc20 Token ' + amount + ' [INS] to [' + destination + '] success. \n');
+    }
 
-        let {eth, web3, getBalance, multiSignWallet, txFinalConfirm} = this;
-        // let multiSignWallet = eth.contract(multiSignWalletContract.abi).at('0xede55bba08e2a1d342f4fae35e228dbcaeaa6038');
+    async sendEther(web3, destination, amount) {
+        let gasPrice = web3.eth.gasPrice;
+        let etherSigner = new EtherSigner(null, config.senderPrivateKey, gasPrice, config.gasLimit);
 
-        let gasPrice = eth.gasPrice;
-        let etherSigner = new EtherSigner(multiSignWallet, config.senderPrivateKey, gasPrice, config.gasLimit);
-
-        //Send 0.1 ETH to multiSignWallet
-        printLog('Send 0.1 ETH to multiSigWallet.');
-        let senderNonce = await eth.getTransactionCount(config.sender);
+        //Send amount ETH to destination
+        printLog('Send ' + amount + ' ETH to [' + destination + '].');
+        let senderNonce = await web3.eth.getTransactionCount(config.sender);
 
         //Offline sign eth transaction data
-        let sigTx = etherSigner.transferSign(senderNonce, multiSignWallet.address, etherSigner.toWei(0.1, 'ether'));
+        let sigTx = etherSigner.transferSign(senderNonce, destination, etherSigner.toWei(amount, 'ether'));
         printLogBasic('Sender nonce: ' + senderNonce);
-        printLogBasic('Send 0.1 ETH to multiSignWallet offline sign hash: ' + sigTx);
+        printLogBasic('Send ' + amount + ' ETH to [' + destination + '] offline sign hash: ' + sigTx);
 
-        let hash = eth.sendRawTransaction(sigTx);
-        printLogBasic('Send 0.1 ETH to multiSignWallet raw transaction hash : ' + hash);
+        let hash = web3.eth.sendRawTransaction(sigTx);
+        printLogBasic('Send ' + amount + ' ETH to [' + destination + '] raw transaction hash : ' + hash);
 
-        let confirmTx = await txFinalConfirm(web3, hash);
-        printLogBasic('Send 0.1 ETH to multiSignWallet transaction confirm : ' + confirmTx.hash);
+        let confirmTx = await this.txFinalConfirm(web3, hash, 3);
+        printLogBasic('Send ' + amount + ' ETH to [' + destination + '] transaction confirm : ' + confirmTx.hash);
 
-        //Get MultiSignWallet balance
-        let multiBalance = await getBalance(web3, multiSignWallet.address);
-        printLogBasic('MultiSignWallet ETH balance: ' + multiBalance);
-        printLog('Send 0.1 ETH to multiSigWallet success. \n');
+        //Get 'destination' balance
+        let multiBalance = await this.getBalance(web3, destination);
+        printLogBasic('[' + destination + '] ETH balance: ' + multiBalance);
+        printLog('Send ' + amount + ' ETH to [' + destination + '] success. \n');
+    }
+
+    executeTransactionListen(web3, multiSignWallet) {
+        multiSignWallet.ExecuteTransaction().watch((err, res) => {
+            this.txFinalConfirm(web3, res.transactionHash, 3).then((result) => {
+                console.log('==================================event ExecuteTransaction s===========================================\n');
+                let args = res.args;
+                if (parseInt(args.tokenContractAddr)) {
+                    console.log('********************************** Listened Erc20 Withdraw *****************************');
+                    console.log(args);
+                } else {
+                    console.log('>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> Listened Ether Withdraw >>>>>>>>>>>>>>>>>>>>>>>>>>>>>');
+                    console.log(args);
+                }
+                console.log('==================================event ExecuteTransaction e===========================================\n');
+            }).catch(console.log);
+        });
+    }
+
+    async executeContractFunc(web3, contract, value, erc20Token) {
+        erc20Token = erc20Token || 0;
+
+        let symbol = erc20Token ? 'Erc20 Token [INS]' : 'ETH';
+
+        let gasPrice = web3.eth.gasPrice;
+        let senderNonce = await web3.eth.getTransactionCount(config.sender);
+
+        let etherSigner = new EtherSigner(contract, config.senderPrivateKey, gasPrice, config.gasLimit);
 
         //Multi node signature authentication is performed for multiSignWallet transfer, call method 'executeTransaction'
-        printLog('Call multiSignWallet `executeTransaction` multi sign transfer ETH to destination');
-        let multiNonce = multiSignWallet.nonce.call();
+        printLog('Call multiSignWallet `executeTransaction` multi sign transfer ' + symbol + ' to destination');
+        let multiNonce = contract.nonce.call();
         printLogBasic('multiNonce: ' + multiNonce.toString());
-
 
         //***The ·amount· must be of the BigNumber type, Otherwise multiSignWallet contract signature authentication will fail
         //***The version of bignumber.js in the running env must be specified as @git+https://github.com/frozeman/bignumber.js-nolookahead.git
-        let amount = etherSigner.toWei(new BigNumber(0.01), 'ether');
+        let amount = etherSigner.toWei(new BigNumber(value), 'ether');
 
         //Contract multi-validation pre-signed
-        let signatures = multiWalletSig.createSigs(config.privateKeys, multiSignWallet.address, multiNonce, config.destination, amount, '0x');
+        let signatures = multiWalletSig.createSigs(config.privateKeys, contract.address, multiNonce, config.destination, amount, '0x');
         printLogBasic('Execute executeTransaction pre signatures:');
         console.log(signatures);
 
-        senderNonce = await eth.getTransactionCount(config.sender);
+
         let params = [
             signatures.sigV,
             signatures.sigR,
@@ -177,29 +219,57 @@ class MultiSignWallet {
             config.destination,
             amount,
             '0x',
+            erc20Token,
+            1,
             {
                 gasPrice,
                 gas: config.gasLimit,
                 from: config.sender
             }
         ];
+
+
         //Offline sign contract transaction
-        let sigConTx = etherSigner.contractTransferSign('executeTransaction', params, multiSignWallet.address, senderNonce, 0);
+        let sigConTx = etherSigner.contractTransferSign('executeTransaction', params, contract.address, senderNonce, 0);
         // printLogBasic('MultiSignWallet executeTransaction offline sign hash: ' + sigConTx);
 
-        let conHash = eth.sendRawTransaction(sigConTx);
+        let conHash = web3.eth.sendRawTransaction(sigConTx);
         printLogBasic('Execute multiWalletSig transaction hash : ' + conHash);
         printLogBasic('Wait confirm.....');
 
-        let confirmConTx = await txFinalConfirm(web3, conHash);
+        let confirmConTx = await this.txFinalConfirm(web3, conHash, 3);
         printLogBasic('Execute multiWalletSig transaction confirm : ' + confirmConTx.hash);
 
-        multiBalance = await getBalance(web3, multiSignWallet.address);
-        printLogBasic('MultiSignWallet ETH balance: ' + multiBalance);
-        printLog('Call multiSignWallet `executeTransaction` multi sign success.')
+        let multiBalance = await this.getBalance(web3, contract.address, erc20Token);
+        printLogBasic('MultiSignWallet ' + symbol + ' balance: ' + multiBalance);
+        printLog('Call multiSignWallet `executeTransaction` multi sign transfer ' + symbol + ' to destination success.\n')
 
-        //Erc20 test
-        //
+
+    }
+
+    async run(multiSignAddress) {
+
+        this.compileContract();
+        let {web3} = this;
+        let multiContract = require('../contracts/multiSigWallet.sol.js');
+
+        //Deploy MultiSignWallet contract.
+        multiSignAddress = multiSignAddress || await this.deployContract('MultiSignWallet', multiContract, [config.owners, config.threshold]);
+
+        let multiSignWallet = web3.eth.contract(multiContract.abi).at(multiSignAddress);
+        this.executeTransactionListen(web3, multiSignWallet);
+
+        //Send 10000 INS Token to MultiSignWallet
+        await this.sendToken(multiSignWallet.address, 10000);
+
+        //Send 0.02 ETH to MultiSignWallet
+        await this.sendEther(web3, multiSignWallet.address, 0.02);
+
+        //Execute MultiSignWallet method 'executeTransaction' transfer ETH
+        await this.executeContractFunc(web3, multiSignWallet, 0.01);
+
+        //Execute MultiSignWallet method 'executeTransaction' transfer Erc20Token
+        await this.executeContractFunc(web3, multiSignWallet, 1000, config.erc20Token);
     }
 
 }
