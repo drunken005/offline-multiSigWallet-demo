@@ -23,8 +23,8 @@
   "homepage": "https://github.com/drunken005/offline-multiSigWallet-demo#readme",
   "dependencies": {
     "bignumber.js": "git+https://github.com/frozeman/bignumber.js-nolookahead.git",
-    "ethereum-offline-sign": "^1.0.1",
-    "multi-wallet-sig": "^1.0.2",
+    "ethereum-offline-sign": "^1.0.2",
+    "multi-wallet-sig": "^1.0.3",
     "solc": "^0.4.25",
     "web3": "^0.20.1"
   }
