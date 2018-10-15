@@ -207,26 +207,27 @@ class MultiSignWallet {
         let amount = etherSigner.toWei(new BigNumber(value), 'ether');
 
         //Contract multi-validation pre-signed
-        let signatures = multiWalletSig.createSigs(config.privateKeys, contract.address, multiNonce, config.destination, amount, '0x');
+        let data = '0x', requestId = 1;
+        let signParams = [
+            contract.address,
+            config.destination,
+            amount,
+            data,
+            multiNonce
+        ];
+        let signatures = multiWalletSig.createSigs(config.privateKeys, ...signParams);
         printLogBasic('Execute executeTransaction pre signatures:');
         console.log(signatures);
 
 
-        let params = [
-            signatures.sigV,
-            signatures.sigR,
-            signatures.sigS,
-            config.destination,
-            amount,
-            '0x',
+        let params = [signatures.sigV, signatures.sigR, signatures.sigS].concat(signParams.slice(1,4)).concat([
             erc20Token,
-            1,
+            requestId,
             {
                 gasPrice,
                 gas: config.gasLimit,
                 from: config.sender
-            }
-        ];
+            }]);
 
 
         //Offline sign contract transaction
